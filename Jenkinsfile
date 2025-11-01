@@ -11,7 +11,7 @@ pipeline {
   stages {
    stage('Stage I: Build') {
       steps {
-        git branch: 'main', credentialsId: 'GitlabCred', url: 'https://github.com/zoumana001/spring-build-pipeline.git'
+        git branch: 'main', credentialsId: 'GithubCred', url: 'https://github.com/zoumana001/spring-build-pipeline.git'
         echo "Building Jar Component ..."
         sh "export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64; mvn clean package "
       }
