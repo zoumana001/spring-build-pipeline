@@ -51,15 +51,14 @@ pipeline {
             set -e
             export JAVA_HOME="$JAVA17"; export PATH="$JAVA_HOME/bin:$PATH"
 
-            # 0) Key present?
+            # 0) Ensure key
             if [ -z "$NVD_API_KEY" ]; then
               echo "ERROR: NVD_API_KEY not set (check Jenkins credentials ID)."
               exit 9
             fi
-
             NVD_API_KEY_CLEAN="$(printf "%s" "$NVD_API_KEY" | tr -d "\\r\\n")"
 
-            # 1) Warm-up probe (should be 200)
+            # 1) Probe API (should be 200)
             CODE=$(curl -s -o /dev/null -w "%{http_code}" \
               -H "apiKey: $NVD_API_KEY_CLEAN" \
               "https://services.nvd.nist.gov/rest/json/cves/2.0?resultsPerPage=1")
@@ -68,7 +67,7 @@ pipeline {
 
             mkdir -p "$DC_DATA_DIR"
 
-            # 2) Seed/update local DB with generous limits & retries (to avoid NVD throttling)
+            # 2) Seed/update DB with HEAVY throttling + reduced range
             MAX_TRIES=3
             TRY=1
             SUCCESS=0
@@ -78,29 +77,30 @@ pipeline {
                 -DskipTests \
                 -DdataDirectory="$DC_DATA_DIR" \
                 -Dnvd.api.key="$NVD_API_KEY_CLEAN" \
-                -Dnvd.api.delay=12000 \
-                -Dnvd.api.maxRetryCount=8 \
-                -Dnvd.api.retryDelay=8000 \
+                -Dnvd.api.delay=15000 \
+                -Dnvd.api.maxRetryCount=10 \
+                -Dnvd.api.retryDelay=12000 \
                 -Dnvd.api.cvesPerPage=120 \
+                -Dnvd.api.startYear=2018 \
                 org.owasp:dependency-check-maven:update-only; then
                   SUCCESS=1
                   break
               fi
               echo "Update attempt $TRY failed; backing off..."
-              S=$((15 + RANDOM % 16)); echo "Sleeping $S seconds..."; sleep $S
+              S=$((30 + RANDOM % 31)); echo "Sleeping $S seconds..."; sleep $S
               TRY=$((TRY+1))
             done
 
             if [ $SUCCESS -ne 1 ]; then
-              echo "WARNING: Could not update NVD cache (HTTP 403/404 likely)."
-              if [ ! -e "$DC_DATA_DIR"/odc.mv.db ] && ! ls "$DC_DATA_DIR"/*.mv.db >/dev/null 2>&1; then
+              echo "WARNING: Could not update NVD cache (403/404 likely due to rate-limits)."
+              if ! ls "$DC_DATA_DIR"/*.mv.db >/dev/null 2>&1; then
                 echo "ERROR: No local cache present; cannot proceed offline."
                 exit 11
               fi
               echo "Proceeding with existing cache (autoupdate=false)."
             fi
 
-            # 3) Run the analysis using local cache (avoid hitting API again)
+            # 3) Run analysis strictly offline to avoid more API calls
             mvn -B \
               -DskipTests \
               -Dautoupdate=false \
