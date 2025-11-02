@@ -8,14 +8,6 @@
   <artifactId>wezvatech-demo</artifactId>
   <version>9739110917</version>
   <packaging>jar</packaging>
-         
-  <nvdApiKey>${env.NVD_API_KEY}</nvdApiKey>
-  <dataDirectory>${project.basedir}/.dependency-check</dataDirectory>
-  <outputDirectory>${project.build.directory}/dependency-check</outputDirectory>
-  <formats>
-    <format>HTML</format>
-    <format>JSON</format>
-  </formats>
 
   <name>Spring boot application example</name>
   <description>Demo wezvatech Ninjas project</description>
@@ -33,7 +25,7 @@
 
   <properties>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-    <!-- compile to Java 8 while running builds on JDK 17 -->
+    <!-- compile with Java 8 bytecode while the build can run on JDK 17 -->
     <maven.compiler.source>1.8</maven.compiler.source>
     <maven.compiler.target>1.8</maven.compiler.target>
 
@@ -42,7 +34,7 @@
     <io.springfox.springfox-swagger2>2.3.1</io.springfox.springfox-swagger2>
     <io.springfox.springfox-swagger-ui>2.3.1</io.springfox.springfox-swagger-ui>
 
-    <!-- plugins (modern, JDK-17 compatible) -->
+    <!-- plugins (JDK-17 friendly) -->
     <jacoco.version>0.8.12</jacoco.version>
     <surefire.version>3.2.5</surefire.version>
     <dependency.check.version>9.1.0</dependency.check.version>
@@ -71,7 +63,7 @@
       <artifactId>spring-boot-starter-data-jpa</artifactId>
     </dependency>
 
-    <!-- DO NOT pin an old version; let Boot manage it -->
+    <!-- Let Boot manage the version -->
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-security</artifactId>
@@ -116,7 +108,7 @@
         <artifactId>spring-boot-maven-plugin</artifactId>
       </plugin>
 
-      <!-- Modern Surefire; picks up JaCoCo's ${argLine} -->
+      <!-- Surefire picks up JaCoCo's ${argLine} -->
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-surefire-plugin</artifactId>
@@ -127,7 +119,7 @@
         </configuration>
       </plugin>
 
-      <!-- JaCoCo agent + report (JDK 17 compatible) -->
+      <!-- JaCoCo agent + report -->
       <plugin>
         <groupId>org.jacoco</groupId>
         <artifactId>jacoco-maven-plugin</artifactId>
@@ -149,22 +141,28 @@
         </executions>
       </plugin>
 
-      <!-- OWASP Dependency-Check (needs Java ≥ 11; you run JDK 17) -->
+      <!-- OWASP Dependency-Check -->
       <plugin>
         <groupId>org.owasp</groupId>
         <artifactId>dependency-check-maven</artifactId>
         <version>${dependency.check.version}</version>
         <configuration>
+          <!-- read key from environment set by Jenkins withCredentials -->
+          <nvdApiKey>${env.NVD_API_KEY}</nvdApiKey>
+
+          <!-- speed & reliability -->
+          <dataDirectory>${project.basedir}/.dependency-check</dataDirectory>
           <outputDirectory>${project.build.directory}/dependency-check</outputDirectory>
+
+          <!-- report formats -->
           <format>HTML</format>
           <formats>
             <format>HTML</format>
             <format>JSON</format>
           </formats>
-          <!-- optional: fail build if CVSS >= 7.0 -->
+
+          <!-- optional: fail if CVSS is high -->
           <failBuildOnCVSS>7.0</failBuildOnCVSS>
-          <!-- optional: cache DB inside workspace -->
-          <dataDirectory>${project.basedir}/.dependency-check</dataDirectory>
         </configuration>
         <executions>
           <execution>
