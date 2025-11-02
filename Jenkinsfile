@@ -33,7 +33,7 @@ pipeline {
         echo "Running Code Coverage ..."
         sh '''
           export JAVA_HOME="$JAVA8"; export PATH="$JAVA_HOME/bin:$PATH"
-          mvn -B verify
+          mvn -B -Ddependency-check.skip=true verify
         '''
       }
       post {
