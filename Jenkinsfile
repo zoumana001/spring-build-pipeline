@@ -43,7 +43,7 @@ pipeline {
       }
     }
 
-    /* ===== DROP-IN REPLACEMENT FOR STAGE III ===== */
+    /* ===== DROP-IN REPLACEMENT FOR STAGE III (uses $HOME/.odc-cache) ===== */
     stage('Stage III: SCA (OWASP, JDK17)') {
       steps {
         echo "Running Software Composition Analysis using OWASP Dependency-Check ..."
@@ -52,11 +52,11 @@ pipeline {
             set -e
             export JAVA_HOME="$JAVA17"; export PATH="$JAVA_HOME/bin:$PATH"
 
-            # --- CONFIG ---
-            SHARED_DC_DIR="/var/lib/odc-cache"           # persistent shared cache (create once, chown to Jenkins)
-            WORK_DC_DIR="$DC_DATA_DIR"                    # job-local (kept for compatibility)
-            USE_DC_DIR="$SHARED_DC_DIR"                   # choose the shared path for longevity
-            SEED_URL="https://YOUR-BUCKET.s3.amazonaws.com/odc-cache.tgz"  # <-- replace with your real seed URL
+            # --- CONFIG (user-writable paths) ---
+            PERSIST_DC_DIR="${HOME:-$WORKSPACE}/.odc-cache"   # persistent cache per agent user
+            WORK_DC_DIR="$DC_DATA_DIR"                        # job-local (kept for compatibility)
+            USE_DC_DIR="$PERSIST_DC_DIR"                      # use the persistent path
+            SEED_URL=""                                       # optional: set to your odc-cache.tgz URL
 
             # 0) Ensure key
             if [ -z "$NVD_API_KEY" ]; then
@@ -65,7 +65,12 @@ pipeline {
             fi
             NVD_API_KEY_CLEAN="$(printf "%s" "$NVD_API_KEY" | tr -d "\\r\\n")"
 
+            # Make sure cache dir exists and is writable
             mkdir -p "$USE_DC_DIR"
+            if [ ! -w "$USE_DC_DIR" ]; then
+              echo "ERROR: Cache dir $USE_DC_DIR not writable."
+              exit 12
+            fi
 
             # 1) Probe API (should be 200)
             CODE=$(curl -s -o /dev/null -w "%{http_code}" \
@@ -73,7 +78,7 @@ pipeline {
               "https://services.nvd.nist.gov/rest/json/cves/2.0?resultsPerPage=1")
             echo "NVD connectivity HTTP code: $CODE"
 
-            # 2) Try throttled update-only into the shared cache
+            # 2) Try throttled update-only into the persistent cache
             UPDATE_OK=0
             if [ "$CODE" = "200" ]; then
               echo "Attempting throttled update-only into $USE_DC_DIR ..."
@@ -100,22 +105,26 @@ pipeline {
               echo "WARNING: NVD probe failed ($CODE); will try offline options."
             fi
 
-            # 3) If update failed and no cache exists yet, fetch a pre-seeded cache
+            # 3) If update failed and no cache exists yet, optionally fetch a pre-seeded cache
             if [ $UPDATE_OK -ne 1 ]; then
               if ! ls "$USE_DC_DIR"/*.mv.db >/dev/null 2>&1; then
-                echo "No local cache present; fetching pre-seeded cache from: $SEED_URL"
-                set +e
-                curl -fsSL "$SEED_URL" -o /tmp/odc-cache.tgz
-                T_EC=$?
-                set -e
-                if [ $T_EC -ne 0 ]; then
-                  echo "ERROR: Could not download pre-seeded cache (HTTP error)."
-                  echo "Provide a seed tarball or run update-only once from a non-throttled network."
+                if [ -n "$SEED_URL" ]; then
+                  echo "No local cache; fetching pre-seeded cache from: $SEED_URL"
+                  set +e
+                  curl -fsSL "$SEED_URL" -o /tmp/odc-cache.tgz
+                  T_EC=$?
+                  set -e
+                  if [ $T_EC -ne 0 ]; then
+                    echo "ERROR: Could not download pre-seeded cache (HTTP error)."
+                    echo "Provide a seed tarball or run update-only once from a non-throttled network."
+                    exit 11
+                  fi
+                  tar xzf /tmp/odc-cache.tgz -C "$USE_DC_DIR" --strip-components=1 || true
+                  echo "Pre-seeded cache unpacked."
+                else
+                  echo "ERROR: No cache present and SEED_URL not set; cannot proceed offline."
                   exit 11
                 fi
-                mkdir -p "$USE_DC_DIR"
-                tar xzf /tmp/odc-cache.tgz -C "$USE_DC_DIR" --strip-components=1 || true
-                echo "Pre-seeded cache unpacked."
               else
                 echo "Existing cache found at $USE_DC_DIR; proceeding offline."
               fi
