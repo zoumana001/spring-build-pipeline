@@ -51,44 +51,56 @@ pipeline {
             set -e
             export JAVA_HOME="$JAVA17"; export PATH="$JAVA_HOME/bin:$PATH"
 
-            # 1) Verify key exists
+            # 0) Key present?
             if [ -z "$NVD_API_KEY" ]; then
               echo "ERROR: NVD_API_KEY not set (check Jenkins credentials ID)."
               exit 9
-            else
-              echo "NVD_API_KEY is present (masked)."
             fi
 
-            # 2) Clean newlines
             NVD_API_KEY_CLEAN="$(printf "%s" "$NVD_API_KEY" | tr -d "\\r\\n")"
 
-            # 3) Quick connectivity check (should be 200)
+            # 1) Warm-up probe (should be 200)
             CODE=$(curl -s -o /dev/null -w "%{http_code}" \
               -H "apiKey: $NVD_API_KEY_CLEAN" \
               "https://services.nvd.nist.gov/rest/json/cves/2.0?resultsPerPage=1")
             echo "NVD connectivity HTTP code: $CODE"
-            if [ "$CODE" != "200" ]; then
-              echo "ERROR: NVD API not reachable or key rejected (HTTP $CODE)."
-              exit 10
+            [ "$CODE" = "200" ] || { echo "NVD probe failed ($CODE)"; exit 10; }
+
+            mkdir -p "$DC_DATA_DIR"
+
+            # 2) Seed/update local DB with generous limits & retries (to avoid NVD throttling)
+            MAX_TRIES=3
+            TRY=1
+            SUCCESS=0
+            while [ $TRY -le $MAX_TRIES ]; do
+              echo "Dependency-Check update-only attempt $TRY/$MAX_TRIES..."
+              if mvn -B \
+                -DskipTests \
+                -DdataDirectory="$DC_DATA_DIR" \
+                -Dnvd.api.key="$NVD_API_KEY_CLEAN" \
+                -Dnvd.api.delay=12000 \
+                -Dnvd.api.maxRetryCount=8 \
+                -Dnvd.api.retryDelay=8000 \
+                -Dnvd.api.cvesPerPage=120 \
+                org.owasp:dependency-check-maven:update-only; then
+                  SUCCESS=1
+                  break
+              fi
+              echo "Update attempt $TRY failed; backing off..."
+              S=$((15 + RANDOM % 16)); echo "Sleeping $S seconds..."; sleep $S
+              TRY=$((TRY+1))
+            done
+
+            if [ $SUCCESS -ne 1 ]; then
+              echo "WARNING: Could not update NVD cache (HTTP 403/404 likely)."
+              if [ ! -e "$DC_DATA_DIR"/odc.mv.db ] && ! ls "$DC_DATA_DIR"/*.mv.db >/dev/null 2>&1; then
+                echo "ERROR: No local cache present; cannot proceed offline."
+                exit 11
+              fi
+              echo "Proceeding with existing cache (autoupdate=false)."
             fi
 
-            # 4) Run Dependency-Check with tuned NVD API pacing
-            mkdir -p "$DC_DATA_DIR"
-            
-            # (Uncomment next line if DB cache becomes corrupted)
-            # rm -rf "$DC_DATA_DIR"/*
-
-            echo "Updating local NVD cache..."
-            mvn -B \
-              -DskipTests \
-              -DdataDirectory="$DC_DATA_DIR" \
-              -Dnvd.api.key="$NVD_API_KEY_CLEAN" \
-              -Dnvd.api.delay=6000 \
-              -Dnvd.api.maxRetryCount=5 \
-              -Dnvd.api.retryDelay=4000 \
-              org.owasp:dependency-check-maven:update-only
-
-            echo "Running Dependency-Check analysis..."
+            # 3) Run the analysis using local cache (avoid hitting API again)
             mvn -B \
               -DskipTests \
               -Dautoupdate=false \
