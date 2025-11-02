@@ -38,7 +38,7 @@ pipeline {
       }
       post {
         always {
-          // If HTML Publisher plugin is installed, uncomment below and remove archiveArtifacts
+          // If HTML Publisher plugin is installed, uncomment block below and remove archiveArtifacts
           // publishHTML(target: [
           //   reportDir: 'target/site/jacoco',
           //   reportFiles: 'index.html',
@@ -54,12 +54,37 @@ pipeline {
         echo "Running Software Composition Analysis using OWASP Dependency-Check ..."
         withCredentials([string(credentialsId: 'NVD_API_KEY', variable: 'NVD_API_KEY')]) {
           sh '''
+            set -e
             export JAVA_HOME="$JAVA17"; export PATH="$JAVA_HOME/bin:$PATH"
+
+            # 1) Verify the key exists (don’t print it)
+            if [ -z "$NVD_API_KEY" ]; then
+              echo "ERROR: NVD_API_KEY env var not set (check Jenkins credentials ID)."
+              exit 9
+            else
+              echo "NVD_API_KEY is present (masked)."
+            fi
+
+            # 2) Trim hidden newlines/carriage-returns that break auth
+            NVD_API_KEY_CLEAN="$(printf "%s" "$NVD_API_KEY" | tr -d "\\r\\n")"
+
+            # 3) Quick connectivity test to NVD API (should be 200)
+            CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+              -H "apiKey: $NVD_API_KEY_CLEAN" \
+              "https://services.nvd.nist.gov/rest/json/cves/2.0?resultsPerPage=1")
+            echo "NVD connectivity HTTP code: $CODE"
+            if [ "$CODE" != "200" ]; then
+              echo "ERROR: NVD API not reachable or key rejected (HTTP $CODE)."
+              echo "If you use a proxy, add -Dhttps.proxyHost/Port to the Maven command below."
+              exit 10
+            fi
+
+            # 4) Run Dependency-Check (cache DB in workspace to avoid constant downloads)
             mkdir -p "$DC_DATA_DIR"
             mvn -B \
               -DskipTests \
               -DdataDirectory="$DC_DATA_DIR" \
-              -Dnvd.api.key="$NVD_API_KEY" \
+              -Dnvd.api.key="$NVD_API_KEY_CLEAN" \
               -Dformat=HTML \
               -DoutputDirectory=target/dependency-check \
               org.owasp:dependency-check-maven:check
@@ -69,7 +94,7 @@ pipeline {
       post {
         always {
           archiveArtifacts artifacts: 'target/dependency-check/*', fingerprint: true
-          // If HTML Publisher is installed, you can also publish the HTML:
+          // If HTML Publisher is installed, you can publish the HTML too:
           // publishHTML(target: [
           //   reportDir: 'target/dependency-check',
           //   reportFiles: 'dependency-check-report.html',
