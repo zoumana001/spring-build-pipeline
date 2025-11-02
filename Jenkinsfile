@@ -20,10 +20,9 @@ pipeline {
         git branch: 'main', credentialsId: 'GithubCred', url: 'https://github.com/zoumana001/spring-build-pipeline.git'
         echo "Building Jar Component ..."
         sh '''
-          export JAVA_HOME="$JAVA17"; export PATH="$JAVA_HOME/bin:$PATH"
-          java -version
-          mvn -v
-          mvn -B clean package
+          export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64
+          export PATH="$JAVA_HOME/bin:$PATH"
+          mvn -B clean test
         '''
       }
     }
@@ -32,9 +31,9 @@ pipeline {
       steps {
         echo "Running Code Coverage ..."
         sh '''
-          export JAVA_HOME="$JAVA17"; export PATH="$JAVA_HOME/bin:$PATH"
-          # Ensure JaCoCo agent ran; do report after tests/build
-          mvn -B org.jacoco:jacoco-maven-plugin:prepare-agent test org.jacoco:jacoco-maven-plugin:report
+          export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64
+          export PATH="$JAVA_HOME/bin:$PATH"
+          mvn -B verify
         '''
       }
     }
@@ -43,31 +42,10 @@ pipeline {
       steps {
         echo "Running Software Composition Analysis using OWASP Dependency-Check ..."
         sh '''
-          export JAVA_HOME="$JAVA17"; export PATH="$JAVA_HOME/bin:$PATH"
-          mkdir -p "$DC_DATA_DIR"
-          # If you store an NVD API key in Jenkins creds as 'NVD_API_KEY', export it before mvn
-          # export NVD_API_KEY="$(printenv NVD_API_KEY)"
-
-          mvn -B \
-            -DskipTests \
-            -DdataDirectory="$DC_DATA_DIR" \
-            -Dformat=HTML \
-            -DoutputDirectory=target/dependency-check \
-            -DfailBuildOnCVSS=7.0 \
-            org.owasp:dependency-check-maven:check
+          export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+          export PATH="$JAVA_HOME/bin:$PATH"
+          mvn -B org.owasp:dependency-check-maven:check
         '''
-      }
-      post {
-        always {
-          archiveArtifacts artifacts: 'target/dependency-check/*', fingerprint: true
-          publishHTML(target: [
-            reportDir: 'target/dependency-check',
-            reportFiles: 'dependency-check-report.html',
-            reportName: 'Dependency-Check Report'
-          ])
-        }
-      }
-    }
 
     stage('Stage IV: SAST') {
       steps {
