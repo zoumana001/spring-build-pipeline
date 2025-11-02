@@ -8,6 +8,14 @@
   <artifactId>wezvatech-demo</artifactId>
   <version>9739110917</version>
   <packaging>jar</packaging>
+         
+  <nvdApiKey>${env.NVD_API_KEY}</nvdApiKey>
+  <dataDirectory>${project.basedir}/.dependency-check</dataDirectory>
+  <outputDirectory>${project.build.directory}/dependency-check</outputDirectory>
+  <formats>
+    <format>HTML</format>
+    <format>JSON</format>
+  </formats>
 
   <name>Spring boot application example</name>
   <description>Demo wezvatech Ninjas project</description>
