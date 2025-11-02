@@ -43,6 +43,7 @@ pipeline {
       }
     }
 
+    /* ===== DROP-IN REPLACEMENT FOR STAGE III ===== */
     stage('Stage III: SCA (OWASP, JDK17)') {
       steps {
         echo "Running Software Composition Analysis using OWASP Dependency-Check ..."
@@ -51,6 +52,12 @@ pipeline {
             set -e
             export JAVA_HOME="$JAVA17"; export PATH="$JAVA_HOME/bin:$PATH"
 
+            # --- CONFIG ---
+            SHARED_DC_DIR="/var/lib/odc-cache"           # persistent shared cache (create once, chown to Jenkins)
+            WORK_DC_DIR="$DC_DATA_DIR"                    # job-local (kept for compatibility)
+            USE_DC_DIR="$SHARED_DC_DIR"                   # choose the shared path for longevity
+            SEED_URL="https://YOUR-BUCKET.s3.amazonaws.com/odc-cache.tgz"  # <-- replace with your real seed URL
+
             # 0) Ensure key
             if [ -z "$NVD_API_KEY" ]; then
               echo "ERROR: NVD_API_KEY not set (check Jenkins credentials ID)."
@@ -58,53 +65,67 @@ pipeline {
             fi
             NVD_API_KEY_CLEAN="$(printf "%s" "$NVD_API_KEY" | tr -d "\\r\\n")"
 
+            mkdir -p "$USE_DC_DIR"
+
             # 1) Probe API (should be 200)
             CODE=$(curl -s -o /dev/null -w "%{http_code}" \
               -H "apiKey: $NVD_API_KEY_CLEAN" \
               "https://services.nvd.nist.gov/rest/json/cves/2.0?resultsPerPage=1")
             echo "NVD connectivity HTTP code: $CODE"
-            [ "$CODE" = "200" ] || { echo "NVD probe failed ($CODE)"; exit 10; }
 
-            mkdir -p "$DC_DATA_DIR"
-
-            # 2) Seed/update DB with HEAVY throttling + reduced range
-            MAX_TRIES=3
-            TRY=1
-            SUCCESS=0
-            while [ $TRY -le $MAX_TRIES ]; do
-              echo "Dependency-Check update-only attempt $TRY/$MAX_TRIES..."
-              if mvn -B \
+            # 2) Try throttled update-only into the shared cache
+            UPDATE_OK=0
+            if [ "$CODE" = "200" ]; then
+              echo "Attempting throttled update-only into $USE_DC_DIR ..."
+              set +e
+              mvn -B \
                 -DskipTests \
-                -DdataDirectory="$DC_DATA_DIR" \
+                -DdataDirectory="$USE_DC_DIR" \
                 -Dnvd.api.key="$NVD_API_KEY_CLEAN" \
                 -Dnvd.api.delay=15000 \
                 -Dnvd.api.maxRetryCount=10 \
                 -Dnvd.api.retryDelay=12000 \
                 -Dnvd.api.cvesPerPage=120 \
                 -Dnvd.api.startYear=2018 \
-                org.owasp:dependency-check-maven:update-only; then
-                  SUCCESS=1
-                  break
+                org.owasp:dependency-check-maven:update-only
+              EC=$?
+              set -e
+              if [ $EC -eq 0 ]; then
+                UPDATE_OK=1
+                echo "Update-only completed."
+              else
+                echo "WARNING: update-only failed with exit code $EC (likely NVD throttling)."
               fi
-              echo "Update attempt $TRY failed; backing off..."
-              S=$((30 + RANDOM % 31)); echo "Sleeping $S seconds..."; sleep $S
-              TRY=$((TRY+1))
-            done
-
-            if [ $SUCCESS -ne 1 ]; then
-              echo "WARNING: Could not update NVD cache (403/404 likely due to rate-limits)."
-              if ! ls "$DC_DATA_DIR"/*.mv.db >/dev/null 2>&1; then
-                echo "ERROR: No local cache present; cannot proceed offline."
-                exit 11
-              fi
-              echo "Proceeding with existing cache (autoupdate=false)."
+            else
+              echo "WARNING: NVD probe failed ($CODE); will try offline options."
             fi
 
-            # 3) Run analysis strictly offline to avoid more API calls
+            # 3) If update failed and no cache exists yet, fetch a pre-seeded cache
+            if [ $UPDATE_OK -ne 1 ]; then
+              if ! ls "$USE_DC_DIR"/*.mv.db >/dev/null 2>&1; then
+                echo "No local cache present; fetching pre-seeded cache from: $SEED_URL"
+                set +e
+                curl -fsSL "$SEED_URL" -o /tmp/odc-cache.tgz
+                T_EC=$?
+                set -e
+                if [ $T_EC -ne 0 ]; then
+                  echo "ERROR: Could not download pre-seeded cache (HTTP error)."
+                  echo "Provide a seed tarball or run update-only once from a non-throttled network."
+                  exit 11
+                fi
+                mkdir -p "$USE_DC_DIR"
+                tar xzf /tmp/odc-cache.tgz -C "$USE_DC_DIR" --strip-components=1 || true
+                echo "Pre-seeded cache unpacked."
+              else
+                echo "Existing cache found at $USE_DC_DIR; proceeding offline."
+              fi
+            fi
+
+            # 4) Run analysis strictly offline (no more API calls)
             mvn -B \
               -DskipTests \
               -Dautoupdate=false \
-              -DdataDirectory="$DC_DATA_DIR" \
+              -DdataDirectory="$USE_DC_DIR" \
               -Dnvd.api.key="$NVD_API_KEY_CLEAN" \
               -Dformat=HTML \
               -DoutputDirectory=target/dependency-check \
@@ -118,6 +139,7 @@ pipeline {
         }
       }
     }
+    /* ===== END DROP-IN ===== */
 
     stage('Stage IV: SAST (SonarQube, JDK8)') {
       steps {
