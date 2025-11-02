@@ -2,11 +2,11 @@ pipeline {
   agent { label 'build' }
 
   environment {
-    registry            = "zoum444/democicd"
-    registryCredential  = "dockerhub"
-    JAVA8               = "/usr/lib/jvm/java-8-openjdk-amd64"
-    JAVA17              = "/usr/lib/jvm/java-17-openjdk-amd64"
-    DC_DATA_DIR         = "${WORKSPACE}/.dependency-check"
+    registry           = "zoum444/democicd"
+    registryCredential = "dockerhub"
+    JAVA8              = "/usr/lib/jvm/java-8-openjdk-amd64"
+    JAVA17             = "/usr/lib/jvm/java-17-openjdk-amd64"
+    DC_DATA_DIR        = "${WORKSPACE}/.dependency-check"
   }
 
   parameters {
@@ -38,12 +38,13 @@ pipeline {
       }
       post {
         always {
-          // Publish JaCoCo HTML if you have the HTML Publisher plugin
-          publishHTML(target: [
-            reportDir: 'target/site/jacoco',
-            reportFiles: 'index.html',
-            reportName: 'JaCoCo Coverage'
-          ])
+          // If HTML Publisher plugin is installed, uncomment below and remove archiveArtifacts
+          // publishHTML(target: [
+          //   reportDir: 'target/site/jacoco',
+          //   reportFiles: 'index.html',
+          //   reportName: 'JaCoCo Coverage'
+          // ])
+          archiveArtifacts artifacts: 'target/site/jacoco/**', fingerprint: true
         }
       }
     }
@@ -51,26 +52,29 @@ pipeline {
     stage('Stage III: SCA (OWASP, JDK17)') {
       steps {
         echo "Running Software Composition Analysis using OWASP Dependency-Check ..."
-        sh '''
-          export JAVA_HOME="$JAVA17"; export PATH="$JAVA_HOME/bin:$PATH"
-          java -version
-          mkdir -p "$DC_DATA_DIR"
-          mvn -B \
-            -DskipTests \
-            -DdataDirectory="$DC_DATA_DIR" \
-            -Dformat=HTML \
-            -DoutputDirectory=target/dependency-check \
-            org.owasp:dependency-check-maven:check
-        '''
+        withCredentials([string(credentialsId: 'NVD_API_KEY', variable: 'NVD_API_KEY')]) {
+          sh '''
+            export JAVA_HOME="$JAVA17"; export PATH="$JAVA_HOME/bin:$PATH"
+            mkdir -p "$DC_DATA_DIR"
+            mvn -B \
+              -DskipTests \
+              -DdataDirectory="$DC_DATA_DIR" \
+              -Dnvd.api.key="$NVD_API_KEY" \
+              -Dformat=HTML \
+              -DoutputDirectory=target/dependency-check \
+              org.owasp:dependency-check-maven:check
+          '''
+        }
       }
       post {
         always {
           archiveArtifacts artifacts: 'target/dependency-check/*', fingerprint: true
-          publishHTML(target: [
-            reportDir: 'target/dependency-check',
-            reportFiles: 'dependency-check-report.html',
-            reportName: 'Dependency-Check Report'
-          ])
+          // If HTML Publisher is installed, you can also publish the HTML:
+          // publishHTML(target: [
+          //   reportDir: 'target/dependency-check',
+          //   reportFiles: 'dependency-check-report.html',
+          //   reportName: 'Dependency-Check Report'
+          // ])
         }
       }
     }
